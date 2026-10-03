@@ -1,28 +1,31 @@
 import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, today, type Meal, type RecipeDetail } from "../api";
-import { useAuth } from "../auth";
-import { ErrorText, MacroRow, RatingLine, Stars } from "../components/ui";
+import { deleteRecipe, getRecipe, logRecipe, MEALS, mealLabel, rateRecipe, today, type Meal, type RecipeDetail } from "../api";
+import { useConfirm, useToast } from "../components/feedback";
+import { ErrorText, Loading, MacroRow, RatingLine, Stars, usePageTitle } from "../components/ui";
 
 export default function RecipePage() {
   const { id } = useParams();
-  const { user } = useAuth();
   const navigate = useNavigate();
   const qc = useQueryClient();
-  const recipe = useQuery({ queryKey: ["recipe", id], queryFn: () => api<RecipeDetail>(`/recipes/${id}`) });
+  const confirm = useConfirm();
+  const toast = useToast();
+  const recipe = useQuery({ queryKey: ["recipe", id], queryFn: () => getRecipe(id!) });
+  usePageTitle(recipe.data?.name);
   const remove = useMutation({
-    mutationFn: () => api(`/recipes/${id}`, { method: "DELETE" }),
+    mutationFn: () => deleteRecipe(id!),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["recipes"] });
+      toast(`Deleted ${recipe.data?.name ?? "recipe"}`);
       navigate("/recipes");
     },
+    onError: (e) => toast((e as Error).message, { tone: "error" }),
   });
 
   if (recipe.error) return <ErrorText error={recipe.error} />;
   const r = recipe.data;
-  if (!r) return <p className="text-stone-500">Loading…</p>;
-  const myReview = r.reviews.find((x) => x.user.id === user?.id);
+  if (!r) return <Loading label="Loading recipe" />;
 
   return (
     <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
@@ -31,24 +34,30 @@ export default function RecipePage() {
           <Link to="/recipes" className="text-sm text-emerald-700">← All recipes</Link>
           <h1 className="text-2xl font-semibold">{r.name}</h1>
           <div className="flex flex-wrap items-center gap-3 text-sm text-stone-600">
-            <span>by {r.author.name}</span>
+            {r.meal && <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-emerald-800">{mealLabel(r.meal)}</span>}
             <span>{r.servings} servings</span>
             <RatingLine rating={r.rating} />
           </div>
           {r.description && <p className="text-stone-700">{r.description}</p>}
           {r.imageUrl && <img src={r.imageUrl} alt="" className="max-h-80 w-full rounded-lg object-cover" />}
-          {r.canEdit && (
-            <div className="flex gap-2">
-              <Link to={`/recipes/${r.id}/edit`} className="btn-secondary">Edit</Link>
-              <button
-                className="btn-secondary text-red-700"
-                onClick={() => confirm("Delete this recipe?") && remove.mutate()}
-                disabled={remove.isPending}
-              >
-                Delete
-              </button>
-            </div>
-          )}
+          <div className="flex gap-2">
+            <Link to={`/recipes/${r.id}/edit`} className="btn-secondary">Edit</Link>
+            <button
+              className="btn-secondary text-red-700"
+              onClick={async () => {
+                const ok = await confirm({
+                  title: `Delete ${r.name}?`,
+                  message: "The recipe and its rating are removed. Days you already logged keep their calories.",
+                  confirmLabel: "Delete",
+                  danger: true,
+                });
+                if (ok) remove.mutate();
+              }}
+              disabled={remove.isPending}
+            >
+              Delete
+            </button>
+          </div>
         </div>
 
         <section className="card overflow-x-auto">
@@ -90,7 +99,7 @@ export default function RecipePage() {
               </tr>
             </tbody>
           </table>
-          <p className="mt-2 text-xs text-stone-400">Macros in grams. Nutrition data from USDA FoodData Central unless marked custom.</p>
+          <p className="mt-2 text-xs text-stone-400">Macros in grams. Values come from USDA FoodData Central, the built-in kitchen list, or foods you entered; change any of them on the Foods page.</p>
         </section>
 
         {r.instructions && (
@@ -100,22 +109,9 @@ export default function RecipePage() {
           </section>
         )}
 
-        <section className="card space-y-4">
-          <h2 className="font-semibold">Reviews</h2>
-          {!r.canEdit && <ReviewForm recipeId={r.id} existing={myReview} />}
-          {r.reviews.length === 0 && <p className="text-sm text-stone-500">No reviews yet.</p>}
-          <ul className="space-y-3">
-            {r.reviews.map((rev) => (
-              <li key={rev.id} className="border-t border-stone-100 pt-3">
-                <div className="flex items-center gap-2 text-sm">
-                  <Stars value={rev.rating} size="text-sm" />
-                  <span className="font-medium">{rev.user.name}</span>
-                  <span className="text-xs text-stone-400">{new Date(rev.updatedAt).toLocaleDateString()}</span>
-                </div>
-                {rev.comment && <p className="mt-1 text-sm text-stone-700">{rev.comment}</p>}
-              </li>
-            ))}
-          </ul>
+        <section className="card space-y-3">
+          <h2 className="font-semibold">My rating</h2>
+          <ReviewForm recipeId={r.id} existing={r.myReview ?? undefined} />
         </section>
       </div>
 
@@ -133,51 +129,56 @@ export default function RecipePage() {
   );
 }
 
-function ReviewForm({ recipeId, existing }: { recipeId: number; existing?: { rating: number; comment: string } }) {
+function ReviewForm({ recipeId, existing }: { recipeId: string; existing?: { rating: number; comment: string; updatedAt: number } }) {
   const qc = useQueryClient();
+  const toast = useToast();
   const [rating, setRating] = useState(existing?.rating ?? 0);
   const [comment, setComment] = useState(existing?.comment ?? "");
   const save = useMutation({
-    mutationFn: () => api(`/recipes/${recipeId}/review`, { method: "PUT", body: { rating, comment } }),
+    mutationFn: () => rateRecipe(recipeId, { rating, comment }),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["recipe", String(recipeId)] });
+      qc.invalidateQueries({ queryKey: ["recipe", recipeId] });
       qc.invalidateQueries({ queryKey: ["recipes"] });
+      toast("Rating saved");
     },
   });
   return (
     <form
-      className="space-y-2 rounded-md bg-stone-50 p-3"
+      className="space-y-2"
       onSubmit={(e) => {
         e.preventDefault();
         save.mutate();
       }}
     >
       <div className="flex items-center gap-2 text-sm">
-        <span>{existing ? "Your review" : "Rate this recipe"}</span>
+        <span>{existing ? `Rated on ${new Date(existing.updatedAt).toLocaleDateString()}` : "How was it?"}</span>
         <Stars value={rating} onChange={setRating} size="text-xl" />
       </div>
       <textarea
         className="input"
         rows={2}
-        placeholder="How did it taste? Do the calories match what you expected?"
+        placeholder="Notes for next time: what to change, how it tasted"
         value={comment}
         onChange={(e) => setComment(e.target.value)}
       />
       <ErrorText error={save.error} />
-      <button className="btn" disabled={!rating || save.isPending}>{existing ? "Update review" : "Post review"}</button>
-      {save.isSuccess && <span className="ml-2 text-sm text-emerald-700">Saved</span>}
+      <button className="btn" disabled={!rating || save.isPending}>{existing ? "Update" : "Save rating"}</button>
     </form>
   );
 }
 
 function LogRecipeForm({ recipe }: { recipe: RecipeDetail }) {
   const qc = useQueryClient();
+  const toast = useToast();
   const [servings, setServings] = useState("1");
-  const [meal, setMeal] = useState<Meal>("lunch");
+  const [meal, setMeal] = useState<Meal>(recipe.meal ?? "lunch");
   const [date, setDate] = useState(today());
   const log = useMutation({
-    mutationFn: () => api("/log", { body: { date, meal, recipeId: recipe.id, servings: Number(servings) } }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["log"] }),
+    mutationFn: () => logRecipe({ date, meal, recipeId: recipe.id, servings: Number(servings) }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["log"] });
+      toast(`Logged ${kcal} kcal to ${mealLabel(meal)}${date === today() ? "" : ` on ${date}`}`, { action: { label: "See day", to: "/tracker" } });
+    },
   });
   const kcal = Math.round(recipe.perServing.kcal * (Number(servings) || 0));
   return (
@@ -197,21 +198,18 @@ function LogRecipeForm({ recipe }: { recipe: RecipeDetail }) {
         <label className="text-xs text-stone-600">
           Meal
           <select className="input mt-1" value={meal} onChange={(e) => setMeal(e.target.value as Meal)}>
-            <option value="breakfast">Breakfast</option>
-            <option value="lunch">Lunch</option>
-            <option value="dinner">Dinner</option>
-            <option value="snack">Snack</option>
+            {MEALS.map((m) => (
+              <option key={m.id} value={m.id}>{m.label}</option>
+            ))}
           </select>
         </label>
       </div>
-      <input className="input" type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+      <label className="block text-xs text-stone-600">
+        Day
+        <input className="input mt-1" type="date" required value={date} onChange={(e) => setDate(e.target.value)} />
+      </label>
       <ErrorText error={log.error} />
       <button className="btn w-full" disabled={!(Number(servings) > 0) || log.isPending}>Log {kcal} kcal</button>
-      {log.isSuccess && (
-        <p className="text-sm text-emerald-700">
-          Logged. <Link className="underline" to="/tracker">See my day</Link>
-        </p>
-      )}
     </form>
   );
 }

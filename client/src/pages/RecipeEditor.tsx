@@ -2,19 +2,22 @@ import { useEffect, useState, type FormEvent } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { perServing, recipeTotals, rounded } from "../../../shared/nutrition";
-import { api, type Food, type RecipeDetail } from "../api";
+import { getRecipe, MEALS, saveRecipe, type Food, type Meal } from "../api";
 import { FoodPicker, PortionSelect } from "../components/FoodPicker";
-import { ErrorText, MacroRow } from "../components/ui";
+import { useToast } from "../components/feedback";
+import { ErrorText, Loading, MacroRow, usePageTitle } from "../components/ui";
 
-interface Row { key: number; food: Food; quantity: string; portionId: number | null; note: string }
+interface Row { key: number; food: Food; quantity: string; portionId: string | null; note: string }
 let nextKey = 1;
 
 export default function RecipeEditor() {
   const { id } = useParams();
   const navigate = useNavigate();
   const qc = useQueryClient();
-  const existing = useQuery({ queryKey: ["recipe", id], queryFn: () => api<RecipeDetail>(`/recipes/${id}`), enabled: !!id });
-  const [form, setForm] = useState({ name: "", description: "", servings: "2", instructions: "", imageUrl: "" });
+  const toast = useToast();
+  usePageTitle(id ? "Edit recipe" : "New recipe");
+  const existing = useQuery({ queryKey: ["recipe", id], queryFn: () => getRecipe(id!), enabled: !!id });
+  const [form, setForm] = useState({ name: "", meal: "" as Meal | "", description: "", servings: "2", instructions: "", imageUrl: "" });
   const [rows, setRows] = useState<Row[]>([]);
   const [error, setError] = useState<unknown>(null);
   const [saving, setSaving] = useState(false);
@@ -22,7 +25,7 @@ export default function RecipeEditor() {
   useEffect(() => {
     const r = existing.data;
     if (!r) return;
-    setForm({ name: r.name, description: r.description, servings: String(r.servings), instructions: r.instructions, imageUrl: r.imageUrl ?? "" });
+    setForm({ name: r.name, meal: r.meal ?? "", description: r.description, servings: String(r.servings), instructions: r.instructions, imageUrl: r.imageUrl ?? "" });
     setRows(r.ingredients.map((i) => ({ key: nextKey++, food: i.food, quantity: String(i.quantity), portionId: i.portion?.id ?? null, note: i.note })));
   }, [existing.data]);
 
@@ -45,13 +48,15 @@ export default function RecipeEditor() {
       const body = {
         ...form,
         servings,
+        meal: form.meal || null,
         imageUrl: form.imageUrl || null,
         ingredients: rows.map((r) => ({ foodId: r.food.id, quantity: Number(r.quantity), portionId: r.portionId, note: r.note })),
       };
-      const res = await api<{ id: number }>(id ? `/recipes/${id}` : "/recipes", { method: id ? "PUT" : "POST", body });
+      const savedId = await saveRecipe(id ?? null, body);
       qc.invalidateQueries({ queryKey: ["recipes"] });
-      qc.invalidateQueries({ queryKey: ["recipe", String(res.id)] });
-      navigate(`/recipes/${res.id}`);
+      qc.invalidateQueries({ queryKey: ["recipe", savedId] });
+      toast(id ? "Recipe updated" : "Recipe saved");
+      navigate(`/recipes/${savedId}`);
     } catch (err) {
       setError(err);
     } finally {
@@ -60,6 +65,7 @@ export default function RecipeEditor() {
   }
 
   if (id && existing.error) return <ErrorText error={existing.error} />;
+  if (id && !existing.data) return <Loading label="Loading recipe" />;
 
   return (
     <form onSubmit={submit} className="grid gap-6 lg:grid-cols-[1fr_300px]">
@@ -77,7 +83,16 @@ export default function RecipeEditor() {
             <label className="label" htmlFor="description">Short description</label>
             <input id="description" className="input" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
           </div>
-          <div className="grid gap-3 sm:grid-cols-[120px_1fr]">
+          <div className="grid gap-3 sm:grid-cols-[140px_120px_1fr]">
+            <div>
+              <label className="label" htmlFor="meal">Meal</label>
+              <select id="meal" className="input" required value={form.meal} onChange={(e) => setForm({ ...form, meal: e.target.value as Meal })}>
+                <option value="" disabled>Choose…</option>
+                {MEALS.map((m) => (
+                  <option key={m.id} value={m.id}>{m.label}</option>
+                ))}
+              </select>
+            </div>
             <div>
               <label className="label" htmlFor="servings">Servings</label>
               <input id="servings" className="input" type="number" min="0.5" step="0.5" required value={form.servings} onChange={(e) => setForm({ ...form, servings: e.target.value })} />

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { FdcClient, parseFood } from "../server/fdc";
+import { FdcClient, parseFood } from "../shared/usda";
 
 describe("FoodData Central parsing", () => {
   it("reads nutrients and SR Legacy portions", () => {

@@ -1,0 +1,33 @@
+rules_version = '2';
+
+// Single-user app: the account recorded in meta/owner is the only one that can read or write anything.
+// Deploy with `npm run deploy:rules`, or paste this into Firebase console > Firestore > Rules.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isOwner() {
+      return request.auth != null
+        && exists(/databases/$(database)/documents/meta/owner)
+        && get(/databases/$(database)/documents/meta/owner).data.uid == request.auth.uid;
+    }
+
+    // Who owns the app. Anyone may check whether it has been set up (the sign-in page needs to know),
+    // and it can be claimed exactly once, by a signed-in account, for itself.
+    match /meta/owner {
+      allow read: if true;
+      allow create: if request.auth != null
+        && request.resource.data.keys().hasOnly(["uid", "createdAt"])
+        && request.resource.data.uid == request.auth.uid;
+      allow update, delete: if false;
+    }
+
+    // Your name.
+    match /meta/profile {
+      allow read, write: if isOwner();
+    }
+
+    // Your foods, recipes, daily log and goals.
+    match /{collection}/{id} {
+      allow read, write: if isOwner() && collection in ["foods", "recipes", "log", "goals"];
+    }
+  }
+}
