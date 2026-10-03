@@ -1,0 +1,147 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           Int        @id @default(autoincrement())
+  email        String     @unique
+  name         String
+  passwordHash String
+  createdAt    DateTime   @default(now())
+  sessions     Session[]
+  goals        Goal[]
+  recipes      Recipe[]
+  reviews      Review[]
+  logEntries   LogEntry[]
+  customFoods  Food[]
+}
+
+model Session {
+  id        String   @id
+  userId    Int
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+}
+
+model Goal {
+  id            Int      @id @default(autoincrement())
+  userId        Int
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  dailyKcal     Int
+  proteinG      Float?
+  carbsG        Float?
+  fatG          Float?
+  effectiveFrom DateTime @db.Date
+
+  @@unique([userId, effectiveFrom])
+}
+
+/// A food with nutrients per 100 g. Either cached from USDA FoodData Central
+/// (fdcId set) or entered by a user (createdById set).
+model Food {
+  id          Int                @id @default(autoincrement())
+  fdcId       Int?               @unique
+  name        String
+  dataType    String
+  kcal        Float
+  proteinG    Float
+  carbsG      Float
+  fatG        Float
+  fiberG      Float
+  kcalEstimated Boolean          @default(false)
+  createdById Int?
+  createdBy   User?              @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  portions    FoodPortion[]
+  ingredients RecipeIngredient[]
+  logEntries  LogEntry[]
+}
+
+model FoodPortion {
+  id          Int                @id @default(autoincrement())
+  foodId      Int
+  food        Food               @relation(fields: [foodId], references: [id], onDelete: Cascade)
+  label       String
+  gramWeight  Float
+  ingredients RecipeIngredient[]
+  logEntries  LogEntry[]
+}
+
+model Recipe {
+  id           Int                @id @default(autoincrement())
+  authorId     Int
+  author       User               @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  name         String
+  description  String             @default("")
+  servings     Float
+  instructions String             @default("")
+  imageUrl     String?
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
+  ingredients  RecipeIngredient[]
+  reviews      Review[]
+  logEntries   LogEntry[]
+}
+
+model RecipeIngredient {
+  id        Int          @id @default(autoincrement())
+  recipeId  Int
+  recipe    Recipe       @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+  foodId    Int
+  food      Food         @relation(fields: [foodId], references: [id])
+  quantity  Float
+  portionId Int?
+  portion   FoodPortion? @relation(fields: [portionId], references: [id])
+  note      String       @default("")
+  position  Int
+}
+
+model Review {
+  id        Int      @id @default(autoincrement())
+  recipeId  Int
+  recipe    Recipe   @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+  userId    Int
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  rating    Int
+  comment   String   @default("")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([recipeId, userId])
+}
+
+enum Meal {
+  breakfast
+  lunch
+  dinner
+  snack
+}
+
+/// Nutrients are snapshotted when logged, so later recipe edits don't rewrite history.
+model LogEntry {
+  id        Int          @id @default(autoincrement())
+  userId    Int
+  user      User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  date      DateTime     @db.Date
+  meal      Meal
+  name      String
+  recipeId  Int?
+  recipe    Recipe?      @relation(fields: [recipeId], references: [id], onDelete: SetNull)
+  foodId    Int?
+  food      Food?        @relation(fields: [foodId], references: [id], onDelete: SetNull)
+  portionId Int?
+  portion   FoodPortion? @relation(fields: [portionId], references: [id], onDelete: SetNull)
+  quantity  Float
+  kcal      Float
+  proteinG  Float
+  carbsG    Float
+  fatG      Float
+  fiberG    Float
+  createdAt DateTime     @default(now())
+
+  @@index([userId, date])
+}
