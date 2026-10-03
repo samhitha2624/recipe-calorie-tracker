@@ -1,41 +1,79 @@
 # Recipe Calories
 
-A web app where people share recipes, see calories and macros per serving computed from each ingredient, review each other's recipes, and track what they eat each day against a calorie goal.
+A private web app for one person: keep your recipes, see calories and macros per serving worked out from each ingredient, and log what you eat each day against a calorie goal. It runs entirely on [Firebase](https://firebase.google.com): Authentication for the login, Firestore for the data, Hosting for the website.
 
-- **Accounts:** anyone can sign up with email and password. Recipes and reviews are shared with everyone; food logs and goals are private.
-- **Recipes:** build a recipe from searched ingredients and see calories per serving update as you type. Only the author can edit or delete it.
-- **Reviews:** rate other people's recipes 1 to 5 stars with a comment. One review per person per recipe, editable.
-- **My day:** log recipes (by servings) or single foods (by grams or portion) to breakfast, lunch, dinner or snacks, see the total against your goal, and a 7-day chart.
-- **Nutrition data:** [USDA FoodData Central](https://fdc.nal.usda.gov/) (public domain). A food is copied into the database the first time someone uses it. Users can also add their own foods from a label.
+## Features
 
-Design doc: https://claude.ai/code/artifact/81a74289-d24a-4c54-ae24-f26c7687dd9a
+- **My day** – log foods or recipes to Breakfast, Lunch, Snacks or Dinner, see what's left of your daily goal, and a 7-day chart. Every entry can be edited (amount, meal, day, name, calories).
+- **Recipes** – sorted into Breakfast, Lunch, Snacks and Dinner, with calories and macros per serving. Rate them and keep notes for next time.
+- **Paste a recipe** – type the ingredients one per line ("2 cups milk", "Onion - 1, chopped", "salt to taste") and the steps. Each line is matched to a food, the calories update as you type, and the recipe is saved in one step.
+- **Kitchen items** – about 60 everyday ingredients (milk, curd, rice, atta, dals, oil, ghee, onion…) with calories, macros and cup/spoon/piece weights built in, so "milk" just works.
+- **Foods** – change the name, nutrition values or portion weights of any food: kitchen items, foods you add from a label, and foods saved from [USDA FoodData Central](https://fdc.nal.usda.gov/). Recipes update straight away; days you already logged keep their calories.
+- **One login** – a username and password. The first time the app opens you create it; after that nobody else can, and only that login can see or change anything.
+- **Works offline** – data is kept on your device too, so pages open instantly and changes sync when you're back online.
 
-## Stack
+## Set up Firebase (once)
 
-React + Vite + Tailwind on the front end, Express + Prisma + PostgreSQL on the back end, all TypeScript. The calorie math lives in `shared/nutrition.ts` and is used by both.
+The project is already connected to the Firebase project `calories-tracker-55de4` (see `client/src/firebase-config.ts` and `.firebaserc`). In the [Firebase console](https://console.firebase.google.com/project/calories-tracker-55de4):
 
-## Run it locally
+1. **Authentication → Get started → Sign-in method:** enable **Email/Password**.
+2. **Firestore Database → Create database:** choose a location near you and start in **production mode**.
+3. **Firestore Database → Rules:** replace the rules with the contents of [`firestore.rules`](firestore.rules) and click **Publish**. (Or run `npx firebase login` once, then `npm run deploy:rules`.)
 
-You need Node 20+ and PostgreSQL.
+Then start the app (below) and create your username and password on the first screen. Afterwards you can untick **Authentication → Settings → User actions → Enable create (sign-up)** for extra peace of mind.
+
+## Run it
+
+You need [Node.js 20+](https://nodejs.org/).
 
 ```sh
-cp .env.example .env            # then edit DATABASE_URL and FDC_API_KEY
 npm install
-npx prisma migrate deploy       # create the tables
-npm run dev                     # API on :3000, web app on http://localhost:5173
+npm run dev          # open http://localhost:5173
 ```
 
-Get a free USDA API key at https://fdc.nal.usda.gov/api-key-signup. Without one the app uses `DEMO_KEY`, which allows only 30 searches an hour.
+This uses your real Firebase project. To try things out without touching it, run `npm run dev:local` instead: it starts the Firebase emulators on your computer (needs [Java 21+](https://adoptium.net/)) and the app uses those. Emulator data is wiped when you stop it.
 
-## Tests
+USDA food search uses a shared demo key (about 30 searches an hour). For more, get a free key at https://fdc.nal.usda.gov/api-key-signup and put it in a `.env` file as `VITE_FDC_API_KEY=...` (see `.env.example`).
+
+## Put it online
 
 ```sh
-npm test            # needs a Postgres database for the API tests
-npm run typecheck
+npx firebase login   # once
+npm run deploy       # builds the app and publishes it with the Firestore rules
 ```
 
-The API tests use `TEST_DATABASE_URL` (default `postgresql://app:app@localhost:5432/recipes_test`) and empty it before each run, so don't point it at real data.
+The app is then live at https://calories-tracker-55de4.web.app.
 
-## Deploy
+## Changing or forgetting the password
 
-`render.yaml` sets up a Render web service plus a Postgres database. In Render choose New > Blueprint, pick this repo, and set `FDC_API_KEY` when asked. Any host works: run `npm run build`, `npx prisma migrate deploy`, then `npm start` with `NODE_ENV=production` and `DATABASE_URL` set.
+To change it, click **your name → Change password** in the app.
+
+If you forget it: there's no email behind the username, so the app can't send a reset link. Your data isn't tied to the login, so you can make a new one instead:
+
+1. In the Firebase console, **Authentication → Users**: delete your user.
+2. **Firestore Database → Data → meta → owner**: delete that document. (If you turned off sign-ups, turn them back on for a moment.)
+3. Open the app. It asks you to create a login again, and all your recipes, foods and logs are still there.
+
+## Development
+
+| Command | What it does |
+| --- | --- |
+| `npm run dev` | Runs the app against your Firebase project, with live reload. |
+| `npm run dev:local` | Runs the app against local Firebase emulators (needs Java 21+). |
+| `npm run build` | Builds the website into `dist/`. |
+| `npm run typecheck` | Checks the TypeScript. |
+| `npm test` | Unit tests, then the security-rules tests on the Firestore emulator (needs Java 21+). |
+| `npm run deploy` | Builds and publishes the website and the security rules. |
+
+### Project layout
+
+```
+client/              The web app (React, Vite, Tailwind)
+  src/api.ts         All reading and writing of your data (Firestore)
+  src/firebase.ts    Firebase setup and the login
+  src/pages/         One file per screen
+  src/components/    Food search, dialogs, messages
+shared/              Calorie maths, the ingredient-line reader, kitchen items, USDA client
+firestore.rules      Who may read and write what (only the owner)
+tests/               Unit tests and security-rules tests
+```

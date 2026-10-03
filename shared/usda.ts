@@ -1,5 +1,5 @@
 // Client for USDA FoodData Central: https://fdc.nal.usda.gov/api-guide
-import { estimateKcal } from "../shared/nutrition.js";
+import { estimateKcal } from "./nutrition";
 
 const BASE = "https://api.nal.usda.gov/fdc/v1";
 
@@ -40,7 +40,8 @@ export type Fetch = typeof fetch;
 const TYPE_RANK: Record<string, number> = { Foundation: 0, "SR Legacy": 1, "Survey (FNDDS)": 2, Branded: 3 };
 
 export class FdcClient {
-  constructor(private apiKey: string, private fetchImpl: Fetch = fetch) {}
+  // Wrapped so browsers don't reject fetch being called as a method of this class ("Illegal invocation").
+  constructor(private apiKey: string, private fetchImpl: Fetch = (input, init) => fetch(input, init)) {}
 
   private async get(path: string, params: Record<string, string> = {}): Promise<any> {
     const url = new URL(BASE + path);

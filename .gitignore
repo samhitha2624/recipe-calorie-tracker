@@ -1,4 +1,18 @@
 node_modules
 dist
-.env
+coverage
+*.tsbuildinfo
 *.log
+.firebase/
+
+# Local settings and secrets
+.env
+.env.*
+!.env.example
+!.env.emulators
+
+# Editor and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

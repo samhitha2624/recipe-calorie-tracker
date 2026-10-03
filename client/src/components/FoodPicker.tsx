@@ -1,11 +1,9 @@
 import { useEffect, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { api, type Food, type UsdaHit } from "../api";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { createFood, importUsda, searchFoods, type Food, type UsdaHit } from "../api";
 import { ErrorText } from "./ui";
 
-interface SearchResult { custom: Food[]; usda: UsdaHit[]; usdaError?: string | null }
-
-function useDebounced<T>(value: T, ms: number) {
+export function useDebounced<T>(value: T, ms: number) {
   const [v, setV] = useState(value);
   useEffect(() => {
     const t = setTimeout(() => setV(value), ms);
@@ -14,8 +12,9 @@ function useDebounced<T>(value: T, ms: number) {
   return v;
 }
 
-/** Search USDA FoodData Central and custom foods; resolves to a saved local food. */
+/** Search kitchen items, your foods and USDA FoodData Central; resolves to a saved food. */
 export function FoodPicker({ onPick }: { onPick: (food: Food) => void }) {
+  const qc = useQueryClient();
   const [q, setQ] = useState("");
   const [busy, setBusy] = useState<number | null>(null);
   const [error, setError] = useState<unknown>(null);
@@ -23,7 +22,7 @@ export function FoodPicker({ onPick }: { onPick: (food: Food) => void }) {
   const term = useDebounced(q.trim(), 350);
   const search = useQuery({
     queryKey: ["food-search", term],
-    queryFn: () => api<SearchResult>(`/foods/search?q=${encodeURIComponent(term)}`),
+    queryFn: () => searchFoods(term),
     enabled: term.length >= 2,
   });
 
@@ -31,7 +30,8 @@ export function FoodPicker({ onPick }: { onPick: (food: Food) => void }) {
     setBusy(hit.fdcId);
     setError(null);
     try {
-      onPick(await api<Food>("/foods/import", { body: { fdcId: hit.fdcId } }));
+      onPick(await importUsda(hit.fdcId));
+      qc.invalidateQueries({ queryKey: ["foods"] });
       setQ("");
     } catch (e) {
       setError(e);
@@ -62,10 +62,18 @@ export function FoodPicker({ onPick }: { onPick: (food: Food) => void }) {
       {search.isFetching && <p className="text-xs text-stone-500">Searching…</p>}
       {data && (
         <ul className="max-h-72 divide-y divide-stone-100 overflow-y-auto rounded-md border border-stone-200 bg-white">
-          {data.custom.map((f) => (
-            <li key={`c${f.id}`}>
+          {data.kitchen.map((f) => (
+            <li key={`k${f.id}`}>
               <button type="button" className="flex w-full justify-between gap-2 px-3 py-2 text-left text-sm hover:bg-emerald-50" onClick={() => onPick(f)}>
-                <span>{f.name} <span className="text-xs text-stone-400">custom</span></span>
+                <span>{f.name} <span className="text-xs text-emerald-700">kitchen</span></span>
+                <span className="shrink-0 text-stone-500">{Math.round(f.kcal)} kcal/100 g</span>
+              </button>
+            </li>
+          ))}
+          {data.saved.map((f) => (
+            <li key={`s${f.id}`}>
+              <button type="button" className="flex w-full justify-between gap-2 px-3 py-2 text-left text-sm hover:bg-emerald-50" onClick={() => onPick(f)}>
+                <span>{f.name} <span className="text-xs text-stone-400">{f.kind === "custom" ? "mine" : "saved"}</span></span>
                 <span className="shrink-0 text-stone-500">{Math.round(f.kcal)} kcal/100 g</span>
               </button>
             </li>
@@ -88,7 +96,7 @@ export function FoodPicker({ onPick }: { onPick: (food: Food) => void }) {
             </li>
           ))}
           {data.usdaError && <li className="px-3 py-2 text-sm text-amber-700">{data.usdaError}</li>}
-          {!data.custom.length && !data.usda.length && !data.usdaError && <li className="px-3 py-2 text-sm text-stone-500">No matches.</li>}
+          {!data.kitchen.length && !data.saved.length && !data.usda.length && !data.usdaError && <li className="px-3 py-2 text-sm text-stone-500">No matches.</li>}
         </ul>
       )}
       <button type="button" className="text-sm text-emerald-700 underline" onClick={() => setCreating(true)}>
@@ -99,6 +107,7 @@ export function FoodPicker({ onPick }: { onPick: (food: Food) => void }) {
 }
 
 function CustomFoodForm({ initialName, onSaved, onCancel }: { initialName: string; onSaved: (f: Food) => void; onCancel: () => void }) {
+  const qc = useQueryClient();
   const [f, setF] = useState({ name: initialName, kcal: "", proteinG: "", carbsG: "", fatG: "", fiberG: "" });
   const [error, setError] = useState<unknown>(null);
   const fields: [keyof typeof f, string][] = [
@@ -112,9 +121,8 @@ function CustomFoodForm({ initialName, onSaved, onCancel }: { initialName: strin
     setError(null);
     try {
       const num = (s: string) => (s.trim() === "" ? 0 : Number(s));
-      const food = await api<Food>("/foods", {
-        body: { name: f.name, kcal: num(f.kcal), proteinG: num(f.proteinG), carbsG: num(f.carbsG), fatG: num(f.fatG), fiberG: num(f.fiberG) },
-      });
+      const food = await createFood({ name: f.name, kcal: num(f.kcal), proteinG: num(f.proteinG), carbsG: num(f.carbsG), fatG: num(f.fatG), fiberG: num(f.fiberG) });
+      qc.invalidateQueries({ queryKey: ["foods"] });
       onSaved(food);
     } catch (e) {
       setError(e);
@@ -141,9 +149,9 @@ function CustomFoodForm({ initialName, onSaved, onCancel }: { initialName: strin
   );
 }
 
-export function PortionSelect({ food, value, onChange }: { food: Food; value: number | null; onChange: (id: number | null) => void }) {
+export function PortionSelect({ food, value, onChange }: { food: Food; value: string | null; onChange: (id: string | null) => void }) {
   return (
-    <select className="input" value={value ?? ""} onChange={(e) => onChange(e.target.value ? Number(e.target.value) : null)}>
+    <select className="input" aria-label="Unit" value={value ?? ""} onChange={(e) => onChange(e.target.value || null)}>
       <option value="">grams</option>
       {food.portions.map((p) => (
         <option key={p.id} value={p.id}>
